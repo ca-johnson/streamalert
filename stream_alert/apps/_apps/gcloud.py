@@ -24,7 +24,6 @@ from oauth2client import client, service_account
 
 from . import AppIntegration, StreamAlertApp, get_logger
 
-
 LOGGER = get_logger(__name__)
 
 
@@ -32,9 +31,9 @@ LOGGER = get_logger(__name__)
 logging.getLogger('googleapiclient.discovery_cache').setLevel(logging.ERROR)
 
 
-class GSuiteReportsApp(AppIntegration):
-    """G Suite Reports base app integration. This is subclassed for various endpoints"""
-    _SCOPES = ['https://www.googleapis.com/auth/admin.reports.audit.readonly']
+class GCloudAuditLogApp(AppIntegration):
+    """G Cloud Audit Log base app integration. This is subclassed for various log types"""
+    _SCOPES = ['https://www.googleapis.com/auth/logging.read']
     # A tuple of uncaught exceptions that the googleapiclient can raise
     _GOOGLE_API_EXCEPTIONS = (apiclient.errors.Error, client.Error, socket.timeout,
                               ssl.SSLError)
@@ -44,12 +43,21 @@ class GSuiteReportsApp(AppIntegration):
     # This is limited by AWS SSM parameter store maximum of 4096 characters.
     _MAX_EVENT_IDS = 100
 
+
     def __init__(self, event, context):
-        super(GSuiteReportsApp, self).__init__(event, context)
-        self._activities_service = None
+        super(GCloudAuditLogApp, self).__init__(event, context)
+        self._log_service = None
         self._last_event_timestamp = None
         self._next_page_token = None
         self._last_run_event_ids = []
+
+        # The resources to get audit logs for, valid formats include:
+        # projects/[PROJECT_ID]
+        # organizations/[ORGANIZATION_ID]
+        # billingAccounts/[BILLING_ACCOUNT_ID]
+        # folders/[FOLDER_ID]
+        # self._resource = self._config['resources'] # ???
+
 
     @classmethod
     def _type(cls):
@@ -57,7 +65,7 @@ class GSuiteReportsApp(AppIntegration):
 
     @classmethod
     def service(cls):
-        return 'gsuite'
+        return 'gcloud'
 
     @classmethod
     def date_formatter(cls):
@@ -87,41 +95,48 @@ class GSuiteReportsApp(AppIntegration):
         return creds
 
     def _create_service(self):
-        """GSuite requests must be signed with the keyfile
+        """GCloud requests must be signed with the keyfile
 
         Returns:
             bool: True if the Google API discovery service was successfully established or False
                 if any errors occurred during the creation of the Google discovery service,
         """
-        LOGGER.debug('[%s] Creating activities service', self)
+        # Is this in the right place?
+        # self._log_name = "cloudaudit.googleapis.com%2F{}".format(self._type())
 
-        if self._activities_service:
+        LOGGER.debug('[%s] Creating log entries service', self)
+
+        if self._log_service:
             LOGGER.debug('[%s] Service already instantiated', self)
             return True
+
         creds = self._load_credentials(self._config.auth['keyfile'])
         if not creds:
             return False
 
+
+        # gcloud_logging.Client(project="firm-scout-180414")
+
         delegation = creds.create_delegated(self._config.auth['delegation_email'])
         try:
-            resource = apiclient.discovery.build('admin', 'reports_v1', credentials=delegation)
+            resource = apiclient.discovery.build('logging', 'v2', credentials=delegation)
         except self._GOOGLE_API_EXCEPTIONS:
             LOGGER.exception('[%s] Failed to build discovery service', self)
             return False
 
         # The google discovery service 'Resource' class that is returned by
         # 'discovery.build' dynamically loads methods/attributes, so pylint will complain
-        # about no 'activities' member existing without the below pylint comment
-        self._activities_service = resource.activities()  # pylint: disable=no-member
+        # about no 'entries' member existing without the below pylint comment
+        self._log_service = resource.entries()  # pylint: disable=no-member
 
         return True
 
     def _gather_logs(self):
-        """Gather the G Suite Admin Report logs for this application type
+        """Gather the G Cloud Audit Logs of this log type
 
         Returns:
             bool or list: If the execution fails for some reason, return False.
-                Otherwise, return a list of activies for this application type.
+                Otherwise, return a list of audit log entries for this log type.
         """
         if not self._create_service():
             return False
@@ -131,57 +146,61 @@ class GSuiteReportsApp(AppIntegration):
             self._last_event_timestamp = self._last_timestamp
             self._last_run_event_ids = self._context.get('last_event_ids', [])
 
-        LOGGER.debug('[%s] Querying activities since %s', self, self._last_event_timestamp)
+        LOGGER.debug('[%s] Querying entries since %s', self, self._last_event_timestamp)
         LOGGER.debug('[%s] Using next page token: %s', self, self._next_page_token)
         LOGGER.debug('[%s] Last run event ids: %s', self, self._last_run_event_ids)
 
-        activities_list = self._activities_service.list(
-            userKey='all',
-            applicationName=self._type(),
-            startTime=self._last_event_timestamp,
-            pageToken=self._next_page_token
+        # https://developers.google.com/resources/api-libraries/documentation/logging/v2/python/latest/logging_v2.entries.html#list
+        entries_list = self._log_service.list(
+            body={
+                # orderBy
+                # pageSize
+                # https://cloud.google.com/logging/docs/view/advanced-filters
+                'filter': 'logName = {log_name} AND timestamp >= "{last_event}"'.format(**{
+                    'log_name': ("cloudaudit.googleapis.com%2F{}".format(self._type())),
+                    'last_event': self._last_event_timestamp,
+                    }),
+                'resourceNames': ["projects/firm-scout-180414"],
+                'pageToken': self._next_page_token
+            },
         )
 
         try:
-            results = activities_list.execute()
+            results = entries_list.execute()
         except self._GOOGLE_API_EXCEPTIONS:
             LOGGER.exception('[%s] Failed to execute activities listing', self)
             return False
 
         if not results:
-            LOGGER.error('[%s] No results received from the G Suite API request', self)
+            LOGGER.error('[%s] No results received from the G Cloud API request', self)
             return False
 
         # Remove duplicate events present in the last time period.
-        activities = [
-            activity for activity in results.get('items', [])
-            if activity['id']['uniqueQualifier'] not in set(self._last_run_event_ids)
+        entries = [
+            entry for entry in results.get('entries', [])
+            if entry['insertId'] not in set(self._last_run_event_ids)
         ]
-        if not activities:
-            LOGGER.info('[%s] No logs in response from G Suite API request', self)
+        if not entries:
+            LOGGER.info('[%s] No logs in response from G Cloud API request', self)
             return False
 
-        # The activity api returns logs in reverse chronological order, for some reason, and
-        # therefore the newest log will be first in the list. This should only be updated
-        # once during the first poll
-        if not self._next_page_token:
-            self._last_timestamp = activities[0]['id']['time']
-            LOGGER.debug('[%s] Caching last timestamp: %s', self, self._last_timestamp)
-            # Store the event ids with the most recent timestamp to de-duplicate them next time
-            next_run_event_ids = [
-                activity['id']['uniqueQualifier']
-                for activity in activities
-                if activity['id']['time'] == self._last_timestamp
-            ]
-            self._context['last_event_ids'] = next_run_event_ids[:self._MAX_EVENT_IDS]
-            if len(next_run_event_ids) > self._MAX_EVENT_IDS:
-                LOGGER.warning('[%s] More than %d next_run_event_ids. Unable to de-duplicate: %s',
-                               self, self._MAX_EVENT_IDS, next_run_event_ids[self._MAX_EVENT_IDS:])
+        self._last_timestamp = entries[-1]['timestamp']
+        LOGGER.debug('[%s] Caching last timestamp: %s', self, self._last_timestamp)
+        # Store the event ids with the most recent timestamp to de-duplicate them next time
+        next_run_event_ids = [
+            entry['insertId']
+            for entry in entries
+            if entry['timestamp'] == self._last_timestamp
+        ]
+        self._context['last_event_ids'] = next_run_event_ids[:self._MAX_EVENT_IDS]
+        if len(next_run_event_ids) > self._MAX_EVENT_IDS:
+            LOGGER.warning('[%s] More than %d next_run_event_ids. Unable to de-duplicate: %s',
+                           self, self._MAX_EVENT_IDS, next_run_event_ids[self._MAX_EVENT_IDS:])
 
         self._next_page_token = results.get('nextPageToken')
         self._more_to_poll = bool(self._next_page_token)
 
-        return activities
+        return entries
 
     @classmethod
     def _required_auth_info(cls):
@@ -215,104 +234,40 @@ class GSuiteReportsApp(AppIntegration):
 
     def _sleep_seconds(self):
         """Return the number of seconds this polling function should sleep for
-        between requests to avoid failed requests. The Google Admin API allows for
-        5 queries per second. Since it is very unlikely we will hit that, and since
-        we are using Google's api client for requests, this can default to 0.
+        between requests to avoid failed requests. The Google Cloud Audit Log API allows for
+        1 entries.list API call per second
 
         Resource(s):
-            https://developers.google.com/admin-sdk/reports/v1/limits
+            https://cloud.google.com/logging/quotas#logging_usage_limits
 
         Returns:
             int: Number of seconds that this function should sleep for between requests
         """
-        return 0
+        return 1
 
 
 @StreamAlertApp
-class GSuiteAdminReports(GSuiteReportsApp):
-    """G Suite Admin Activity Report app integration"""
+class GCloudAdminAuditLogs(GCloudAuditLogApp):
+    """G Cloud Admin Audit Log app integration"""
 
     @classmethod
     def _type(cls):
-        return 'admin'
+        return 'activity'
 
 
 @StreamAlertApp
-class GSuiteCalendarReports(GSuiteReportsApp):
-    """G Suite Calendar Activity Report app integration"""
+class GCloudSystemEventAuditLogs(GCloudAuditLogApp):
+    """G Cloud System Event Audit Log app integration"""
 
     @classmethod
     def _type(cls):
-        return 'calendar'
+        return 'system_event'
 
 
 @StreamAlertApp
-class GSuiteDriveReports(GSuiteReportsApp):
-    """G Suite Drive Activity Report app integration"""
+class GCloudDataAccessAuditLogs(GCloudAuditLogApp):
+    """G Cloud Data Access Audit Log app integration"""
 
     @classmethod
     def _type(cls):
-        return 'drive'
-
-
-@StreamAlertApp
-class GSuiteGroupsReports(GSuiteReportsApp):
-    """G Suite Groups Activity Report app integration"""
-
-    @classmethod
-    def _type(cls):
-        return 'groups'
-
-
-@StreamAlertApp
-class GSuiteGPlusReports(GSuiteReportsApp):
-    """G Suite Google Plus Activity Report app integration"""
-
-    @classmethod
-    def _type(cls):
-        return 'gplus'
-
-
-@StreamAlertApp
-class GSuiteLoginReports(GSuiteReportsApp):
-    """G Suite Login Activity Report app integration"""
-
-    @classmethod
-    def _type(cls):
-        return 'login'
-
-
-@StreamAlertApp
-class GSuiteMobileReports(GSuiteReportsApp):
-    """G Suite Mobile Activity Report app integration"""
-
-    @classmethod
-    def _type(cls):
-        return 'mobile'
-
-
-@StreamAlertApp
-class GSuiteRulesReports(GSuiteReportsApp):
-    """G Suite Rules Activity Report app integration"""
-
-    @classmethod
-    def _type(cls):
-        return 'rules'
-
-
-@StreamAlertApp
-class GSuiteSAMLReports(GSuiteReportsApp):
-    """G Suite SAML Activity Report app integration"""
-
-    @classmethod
-    def _type(cls):
-        return 'saml'
-
-
-@StreamAlertApp
-class GSuiteTokenReports(GSuiteReportsApp):
-    """G Suite Token Activity Report app integration"""
-
-    @classmethod
-    def _type(cls):
-        return 'token'
+        return 'data_access'

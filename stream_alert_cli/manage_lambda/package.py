@@ -48,6 +48,7 @@ class LambdaPackage(object):
         'boxsdk[jwt]': 'boxsdk[jwt]==2.0.0a11',
         'cbapi': 'cbapi==1.3.6',
         'google-api-python-client': 'google-api-python-client==1.6.4',
+        'google-cloud-logging': 'google-cloud-logging==1.10.0',
         'jmespath': 'jmespath==0.9.3',
         'jsonlines': 'jsonlines==1.2.0',
         'netaddr': 'netaddr==0.7.19',
@@ -255,6 +256,7 @@ class AppPackage(LambdaPackage):
         'backoff',
         'boxsdk[jwt]',
         'google-api-python-client',
+        'google-cloud-logging',
         'oauth2client',
         'requests'
     }

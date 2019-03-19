@@ -71,6 +71,24 @@ def _get_auth_info(app_type):
                                          'a-test-200%40myapp-123456.iam.gserviceaccount.com')
             }
         }
+    elif app_type.startswith('gcloud'):
+        return {
+            'delegation_email': 'test@email.com',
+            'keyfile': {
+                'type': 'service_account',
+                'project_id': 'myapp-123456',
+                'private_key_id': 'a5427e441234a5f416ab0a2e5d759752ef69fbf1',
+                'private_key': ('-----BEGIN PRIVATE KEY-----\nVGhpcyBpcyBub3QgcmVhbA==\n'
+                                '-----END PRIVATE KEY-----\n'),
+                'client_email': 'a-test-200%40myapp-123456.iam.gserviceaccount.com',
+                'client_id': '316364948779587921167',
+                'auth_uri': 'https://accounts.google.com/o/oauth2/auth',
+                'token_uri': 'https://accounts.google.com/o/oauth2/token',
+                'auth_provider_x509_cert_url': 'https://www.googleapis.com/oauth2/v1/certs',
+                'client_x509_cert_url': ('https://www.googleapis.com/robot/v1/metadata/x509/'
+                                         'a-test-200%40myapp-123456.iam.gserviceaccount.com')
+            }
+        }        
     elif app_type.startswith('box'):
         return {
             'keyfile': {

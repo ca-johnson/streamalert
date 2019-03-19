@@ -27,12 +27,10 @@ from tests.unit.helpers.config import basic_streamalert_config
 class TestCLIConfig(object):
     """Test class for CLIConfig"""
 
-    def __init__(self):
-        self.config = None
-        self.fs_patcher = None
-
     def setup(self):
         """Setup before each method"""
+        self.config = None
+        self.fs_patcher = None
         config_data = basic_streamalert_config()
 
         self.fs_patcher = fake_filesystem_unittest.Patcher()
