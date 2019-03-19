@@ -114,9 +114,6 @@ class GCloudAuditLogApp(AppIntegration):
         if not creds:
             return False
 
-
-        # gcloud_logging.Client(project="firm-scout-180414")
-
         delegation = creds.create_delegated(self._config.auth['delegation_email'])
         try:
             resource = apiclient.discovery.build('logging', 'v2', credentials=delegation)
@@ -153,8 +150,6 @@ class GCloudAuditLogApp(AppIntegration):
         # https://developers.google.com/resources/api-libraries/documentation/logging/v2/python/latest/logging_v2.entries.html#list
         entries_list = self._log_service.list(
             body={
-                # orderBy
-                # pageSize
                 # https://cloud.google.com/logging/docs/view/advanced-filters
                 'filter': 'logName = {log_name} AND timestamp >= "{last_event}"'.format(**{
                     'log_name': ("cloudaudit.googleapis.com%2F{}".format(self._type())),
