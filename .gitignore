@@ -28,3 +28,6 @@ venv/
 
 .vagrant/
 htmlcov/
+
+.pytest_cache/
+.vscode/
